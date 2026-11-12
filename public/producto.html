@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Producto de ejemplo · conectado a un agente</title>
+<style>
+  :root {
+    --tinta: #16161a; --papel: #ffffff; --papel-2: #f6f6f7; --linea: #e2e2e5; --gris: #5d5d63;
+    --acento: #c8102e; --serif: Georgia, "Times New Roman", serif; --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+    --e2: 8px; --e3: 16px; --e4: 24px; --radio: 10px;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: var(--sans); color: var(--tinta); background: var(--papel); line-height: 1.5; }
+  main { max-width: 560px; margin: 0 auto; padding: var(--e4) var(--e3); }
+  header { border-bottom: 3px solid var(--acento); padding-bottom: var(--e2); margin-bottom: var(--e4); }
+  header strong { font-family: var(--serif); font-size: 1.25rem; }
+  label { display: block; font-size: .9rem; color: var(--gris); margin-bottom: 4px; }
+  select { font: inherit; width: 100%; min-height: 44px; padding: var(--e2); border: 2px solid var(--tinta); border-radius: var(--radio); background: var(--papel); }
+  select:focus-visible, a:focus-visible { outline: 3px solid var(--acento); outline-offset: 2px; }
+  .ficha { border: 1px solid var(--linea); border-radius: var(--radio); padding: var(--e4); margin-top: var(--e3); }
+  .ficha h1 { font-size: 1rem; margin: 0; }
+  .cifra { font-family: var(--serif); font-size: 3.5rem; font-weight: 700; line-height: 1.1; margin: var(--e2) 0; }
+  .detalle { margin: 4px 0; }
+  .fuente, .vivo { font-size: .85rem; color: var(--gris); margin-top: var(--e3); }
+  .aviso { background: var(--papel-2); border-left: 4px solid var(--tinta); border-radius: var(--radio); padding: var(--e3); margin-top: var(--e3); }
+  footer { margin-top: var(--e4); padding-top: var(--e3); border-top: 1px solid var(--linea); font-size: .85rem; color: var(--gris); }
+</style>
+</head>
+<body>
+<main>
+  <header><strong>Desempleo en tu región</strong></header>
+
+  <label for="selector">Elige tu región</label>
+  <select id="selector" disabled><option>Cargando…</option></select>
+
+  <div id="pantalla" aria-live="polite"><p class="aviso">Buscando los datos del último boletín…</p></div>
+
+  <footer>
+    Cifras de los boletines regionales del INE, entregadas por el agente del curso.
+    Esta página no muestra datos por comuna: la encuesta no los entrega.
+    <p class="vivo" id="vivo"></p>
+  </footer>
+</main>
+
+<script>
+// ─── 1 · DÓNDE VIVE TU AGENTE ────────────────────────────────────────────────
+// Es lo único que cambias: la dirección de TU backend en Cloudflare, sin barra al final.
+const BACKEND = "https://ia-toolkit.pablosilvapasten.workers.dev";
+
+// ─── 2 · PEDIR LOS DATOS ─────────────────────────────────────────────────────
+// fetch() es el navegador pidiéndole algo a otra dirección. Aquí pide GET /regiones a tu agente.
+async function pedirRegiones() {
+  const respuesta = await fetch(BACKEND + "/regiones");
+  if (!respuesta.ok) throw new Error("El agente respondió " + respuesta.status);
+  return respuesta.json();
+}
+
+// ─── 3 · PINTAR LA PANTALLA CON LO QUE LLEGÓ ─────────────────────────────────
+const selector = document.getElementById("selector");
+const pantalla = document.getElementById("pantalla");
+const numero = (n) => n.toLocaleString("es-CL", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+const conSigno = (n) => (n > 0 ? "+" : n < 0 ? "−" : "") + numero(Math.abs(n));
+
+function pintar(datos, codigo) {
+  const r = datos.regiones.find((x) => x.codigo === codigo);
+  const pais = datos.nacional.tasa;
+  // Si el dato no vino, se dice "no consta". Nunca se inventa ni se deja un cero.
+  const tasa = r.tasa === null ? "no consta" : numero(r.tasa) + "%";
+  const variacion = r.variacion_pp === null ? "Variación en un año: no consta."
+    : conSigno(r.variacion_pp) + " puntos porcentuales en un año.";
+  const frentePais = r.tasa === null ? ""
+    : r.tasa === pais ? "Igual que el país (" + numero(pais) + "%)."
+    : numero(Math.abs(r.tasa - pais)) + " puntos " + (r.tasa > pais ? "sobre" : "bajo") + " el país (" + numero(pais) + "%).";
+  pantalla.innerHTML =
+    '<section class="ficha"><h1>' + r.region + " · " + datos.trimestre + "</h1>" +
+    '<p class="cifra">' + tasa + "</p>" +
+    '<p class="detalle">' + variacion + "</p>" +
+    '<p class="detalle">' + frentePais + "</p>" +
+    '<p class="fuente">Fuente: <a href="' + r.url + '">' + r.fuente + "</a></p></section>";
+}
+
+async function iniciar() {
+  try {
+    const datos = await pedirRegiones();
+    const ordenadas = [...datos.regiones].sort((a, b) => a.region.localeCompare(b.region, "es"));
+    selector.innerHTML = ordenadas.map((r) => '<option value="' + r.codigo + '">' + r.region + "</option>").join("");
+    selector.disabled = false;
+    selector.onchange = () => pintar(datos, selector.value);
+    pintar(datos, selector.value);
+    document.getElementById("vivo").textContent =
+      "Datos leídos en vivo de " + BACKEND + "/regiones · consultado a las " +
+      new Date().toLocaleTimeString("es-CL", { hour: "2-digit", minute: "2-digit", hour12: false });
+  } catch (error) {
+    // El lector no tiene por qué saber qué es una API: se le dice qué pasa y qué puede hacer.
+    selector.innerHTML = "<option>Sin datos por ahora</option>";
+    pantalla.innerHTML = '<p class="aviso"><strong>No pudimos traer las cifras en este momento.</strong> ' +
+      'Vuelve a intentarlo en unos minutos o revisa el boletín en <a href="https://www.ine.gob.cl">ine.gob.cl</a>.</p>';
+  }
+}
+iniciar();
+</script>
+</body>
+</html>
